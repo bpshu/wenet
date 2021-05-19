@@ -19,13 +19,13 @@
 #include <memory>
 #include <string>
 #include <thread>
-
 #include "boost/asio/connect.hpp"
 #include "boost/asio/ip/tcp.hpp"
 #include "boost/beast/core.hpp"
 #include "boost/beast/websocket.hpp"
 
 #include "utils/utils.h"
+#include <sys/time.h>
 
 namespace wenet {
 
@@ -53,6 +53,7 @@ class WebSocketClient {
   bool done() const { return done_; }
 
  private:
+  struct timeval t1, t2;
   void Connect();
   std::string host_;
   int port_;

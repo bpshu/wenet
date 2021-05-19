@@ -55,6 +55,7 @@ void WebSocketClient::SendTextData(const std::string& data) {
 void WebSocketClient::SendBinaryData(const void* data, size_t size) {
   ws_.binary(true);
   ws_.write(asio::buffer(data, size));
+  gettimeofday(&t1, 0);
 }
 
 void WebSocketClient::Close() { ws_.close(websocket::close_code::normal); }
@@ -66,6 +67,13 @@ void WebSocketClient::ReadLoopFunc() {
       ws_.read(buffer);
       std::string message = beast::buffers_to_string(buffer.data());
       LOG(INFO) << message;
+      gettimeofday(&t2, 0);
+      long decode_time = (t2.tv_sec-t1.tv_sec)*1000000 // s to us
+                                + t2.tv_usec-t1.tv_usec; // elapsed in us
+      double decode_secs = double(decode_time)/1000000.0;
+      LOG(INFO) << decode_secs;
+      //
+
       CHECK(ws_.got_text());
       json::object obj = json::parse(message).as_object();
       if (obj["status"] != "ok") {

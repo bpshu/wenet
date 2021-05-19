@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <utility>
+#include <sys/time.h>
 
 namespace wenet {
 
@@ -28,6 +29,8 @@ FeaturePipeline::FeaturePipeline(const FeaturePipelineConfig& config)
       input_finished_(false) {}
 
 void FeaturePipeline::AcceptWaveform(const std::vector<float>& wav) {
+  struct timeval t1, t2;
+  gettimeofday(&t1, 0);
   std::vector<std::vector<float>> feats;
   std::vector<float> waves;
   waves.insert(waves.end(), remained_wav_.begin(), remained_wav_.end());
@@ -44,6 +47,11 @@ void FeaturePipeline::AcceptWaveform(const std::vector<float>& wav) {
             remained_wav_.begin());
   // We are still adding wave, notify input is not finished
   finish_condition_.notify_one();
+  gettimeofday(&t2, 0);
+  long decode_time = (t2.tv_sec-t1.tv_sec)*1000000 // s to us
+                            + t2.tv_usec-t1.tv_usec; // elapsed in us
+  double decode_secs = double(decode_time)/1000000.0;
+  LOG(INFO) << decode_secs;
 }
 
 void FeaturePipeline::set_input_finished() {

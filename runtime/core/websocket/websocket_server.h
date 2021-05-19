@@ -30,7 +30,7 @@
 #include "decoder/torch_asr_model.h"
 #include "frontend/feature_pipeline.h"
 #include "utils/log.h"
-
+#include <sys/time.h>
 namespace wenet {
 
 namespace beast = boost::beast;          // from <boost/beast.hpp>
@@ -50,6 +50,9 @@ class ConnectionHandler {
   void operator()();
 
  private:
+ struct timeval t1, t2;
+  int nsamples;
+  float ntimes;
   void OnSpeechStart();
   void OnSpeechEnd();
   void OnText(const std::string& message);

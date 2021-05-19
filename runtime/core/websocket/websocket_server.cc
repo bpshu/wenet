@@ -42,7 +42,7 @@ ConnectionHandler::ConnectionHandler(
       decode_config_(std::move(decode_config)),
       symbol_table_(std::move(symbol_table)),
       model_(std::move(model)),
-      fst_(std::move(fst)) {}
+      fst_(std::move(fst)) {nsamples=0;ntimes=0;}
 
 void ConnectionHandler::OnSpeechStart() {
   LOG(INFO) << "Recieved speech start signal, start reading speech";
@@ -56,6 +56,7 @@ void ConnectionHandler::OnSpeechStart() {
   // Start decoder thread
   decode_thread_ =
       std::make_shared<std::thread>(&ConnectionHandler::DecodeThreadFunc, this);
+  LOG(INFO) << nsamples << " " << ntimes << " " << ntimes / (nsamples / 16000);
 }
 
 void ConnectionHandler::OnSpeechEnd() {
@@ -86,6 +87,7 @@ void ConnectionHandler::OnFinish() {
   json::value rv = {{"status", "ok"}, {"type", "speech_end"}};
   ws_.text(true);
   ws_.write(asio::buffer(json::serialize(rv)));
+  LOG(INFO) << nsamples << " " << ntimes << " " << ntimes / (nsamples / 16000);
 }
 
 void ConnectionHandler::OnSpeechData(const beast::flat_buffer& buffer) {
@@ -98,9 +100,19 @@ void ConnectionHandler::OnSpeechData(const beast::flat_buffer& buffer) {
     pdata++;
   }
   VLOG(2) << "Recieved " << num_samples << " samples";
+  LOG(INFO) << num_samples;
+  nsamples += num_samples;
   CHECK(feature_pipeline_ != nullptr);
   CHECK(decoder_ != nullptr);
+  gettimeofday(&t1, 0);
   feature_pipeline_->AcceptWaveform(pcm_data);
+
+  gettimeofday(&t2, 0);
+  long decode_time = (t2.tv_sec-t1.tv_sec)*1000000 // s to us
+                            + t2.tv_usec-t1.tv_usec; // elapsed in us
+  double decode_secs = double(decode_time)/1000000.0;
+  LOG(INFO) << decode_secs;
+  ntimes += decode_secs;
 }
 
 std::string ConnectionHandler::SerializeResult(bool finish) {
@@ -128,6 +140,7 @@ std::string ConnectionHandler::SerializeResult(bool finish) {
 
 void ConnectionHandler::DecodeThreadFunc() {
   while (true) {
+    gettimeofday(&t1, 0);
     DecodeState state = decoder_->Decode();
     if (state == DecodeState::kEndFeats) {
       decoder_->Rescoring();
@@ -155,6 +168,12 @@ void ConnectionHandler::DecodeThreadFunc() {
         OnPartialResult(result);
       }
     }
+    gettimeofday(&t2, 0);
+    long decode_time = (t2.tv_sec-t1.tv_sec)*1000000 // s to us
+                              + t2.tv_usec-t1.tv_usec; // elapsed in us
+    double decode_secs = double(decode_time)/1000000.0;
+    LOG(INFO) << decode_secs;
+    ntimes += decode_secs;
   }
 }
 
