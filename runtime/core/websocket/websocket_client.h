@@ -24,16 +24,16 @@
 #include "boost/asio/ip/tcp.hpp"
 #include "boost/beast/core.hpp"
 #include "boost/beast/websocket.hpp"
+#include "boost/json.hpp"
+
 
 #include "utils/utils.h"
 
 namespace wenet {
 
-namespace beast = boost::beast;          // from <boost/beast.hpp>
-namespace http = beast::http;            // from <boost/beast/http.hpp>
-namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
-namespace asio = boost::asio;            // from <boost/asio.hpp>
-using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
+using namespace boost;
+using namespace boost::beast;
+using boost::asio::ip::tcp;       // from <boost/asio/ip/tcp.hpp>
 
 class WebSocketClient {
  public:
@@ -51,6 +51,9 @@ class WebSocketClient {
     continuous_decoding_ = continuous_decoding;
   }
   bool done() const { return done_; }
+  const char* GetNbestText(){
+    return nbest_text_.c_str();
+  }
 
  private:
   void Connect();
@@ -62,6 +65,7 @@ class WebSocketClient {
   asio::io_context ioc_;
   websocket::stream<tcp::socket> ws_{ioc_};
   std::unique_ptr<std::thread> t_{nullptr};
+  std::string nbest_text_="";
 
   WENET_DISALLOW_COPY_AND_ASSIGN(WebSocketClient);
 };

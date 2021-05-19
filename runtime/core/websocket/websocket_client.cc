@@ -20,13 +20,6 @@
 
 namespace wenet {
 
-namespace beast = boost::beast;          // from <boost/beast.hpp>
-namespace http = beast::http;            // from <boost/beast/http.hpp>
-namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
-namespace asio = boost::asio;            // from <boost/asio.hpp>
-using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
-namespace json = boost::json;
-
 WebSocketClient::WebSocketClient(const std::string& host, int port)
     : host_(host), port_(port) {
   Connect();
@@ -75,6 +68,7 @@ void WebSocketClient::ReadLoopFunc() {
         done_ = true;
         break;
       }
+      nbest_text_ = message;
     }
   } catch (beast::system_error const& se) {
     // This indicates that the session was closed

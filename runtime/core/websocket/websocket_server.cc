@@ -18,18 +18,11 @@
 #include <utility>
 #include <vector>
 
-#include "boost/json/src.hpp"
+// #include "boost/json/src.hpp"
 
 #include "utils/log.h"
 
 namespace wenet {
-
-namespace beast = boost::beast;          // from <boost/beast.hpp>
-namespace http = beast::http;            // from <boost/beast/http.hpp>
-namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
-namespace asio = boost::asio;            // from <boost/asio.hpp>
-using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
-namespace json = boost::json;
 
 ConnectionHandler::ConnectionHandler(
     tcp::socket&& socket, std::shared_ptr<FeaturePipelineConfig> feature_config,

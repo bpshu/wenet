@@ -106,19 +106,19 @@ endif(MSVC)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS} -DC10_USE_GLOG")
 
 # utils
-add_library(utils STATIC utils/utils.cc)
+add_library(utils SHARED utils/utils.cc)
 target_link_libraries(utils PUBLIC fst)
 add_dependencies(utils openfst)
 
 # frontend
-add_library(frontend STATIC
+add_library(frontend SHARED
   frontend/feature_pipeline.cc
   frontend/fft.cc
 )
 target_link_libraries(frontend PUBLIC utils)
 
 # decoder
-add_library(decoder STATIC
+add_library(decoder SHARED
   decoder/ctc_prefix_beam_search.cc
   decoder/ctc_endpoint.cc
   decoder/torch_asr_decoder.cc
@@ -127,20 +127,23 @@ add_library(decoder STATIC
 target_link_libraries(decoder PUBLIC ${TORCH_LIBRARIES} utils)
 
 add_executable(ctc_prefix_beam_search_test decoder/ctc_prefix_beam_search_test.cc)
-target_link_libraries(ctc_prefix_beam_search_test PUBLIC gtest_main gmock decoder)
+target_link_libraries(ctc_prefix_beam_search_test PUBLIC gtest_main gmock decoder frontend)
 add_test(CTC_PREFIX_BEAM_SEARCH_TEST ctc_prefix_beam_search_test)
 
 # websocket
-add_library(websocket STATIC
+add_library(websocket SHARED
   websocket/websocket_client.cc
+  websocket/web_client_c.cc
   websocket/websocket_server.cc
 )
-target_link_libraries(websocket PUBLIC decoder frontend)
+target_link_libraries(websocket PUBLIC frontend decoder utils)
 
 # binary
 add_executable(decoder_main bin/decoder_main.cc)
-target_link_libraries(decoder_main PUBLIC frontend decoder)
+target_link_libraries(decoder_main PUBLIC frontend decoder utils)
 add_executable(websocket_client_main bin/websocket_client_main.cc)
-target_link_libraries(websocket_client_main PUBLIC websocket)
+target_link_libraries(websocket_client_main PUBLIC gflags websocket frontend decoder utils)
+add_executable(websocket_client_c_main bin/websocket_client_c_main.cc)
+target_link_libraries(websocket_client_c_main PUBLIC gflags websocket frontend decoder utils)
 add_executable(websocket_server_main bin/websocket_server_main.cc)
-target_link_libraries(websocket_server_main PUBLIC websocket)
+target_link_libraries(websocket_server_main PUBLIC websocket frontend decoder utils)

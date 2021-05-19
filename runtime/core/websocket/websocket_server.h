@@ -25,6 +25,7 @@
 #include "boost/asio/ip/tcp.hpp"
 #include "boost/beast/core.hpp"
 #include "boost/beast/websocket.hpp"
+#include "boost/json.hpp"
 
 #include "decoder/torch_asr_decoder.h"
 #include "decoder/torch_asr_model.h"
@@ -33,13 +34,9 @@
 
 namespace wenet {
 
-namespace beast = boost::beast;          // from <boost/beast.hpp>
-namespace http = beast::http;            // from <boost/beast/http.hpp>
-namespace websocket = beast::websocket;  // from <boost/beast/websocket.hpp>
-namespace asio = boost::asio;            // from <boost/asio.hpp>
-using tcp = boost::asio::ip::tcp;        // from <boost/asio/ip/tcp.hpp>
-
-class ConnectionHandler {
+using namespace boost;
+using namespace boost::beast;
+using boost::asio::ip::tcp;      class ConnectionHandler {
  public:
   ConnectionHandler(tcp::socket&& socket,
                     std::shared_ptr<FeaturePipelineConfig> feature_config,
