@@ -24,6 +24,7 @@ node_rank=0
 # data
 data=/export/data/asr-data/OpenSLR/33/
 data_url=www.openslr.org/resources/33
+data=/data/multiDataReal/aishell-1
 
 nj=16
 feat_dir=raw_wav
@@ -35,9 +36,11 @@ train_set=train
 # 2. conf/train_conformer.yaml: Standard conformer
 # 3. conf/train_unified_conformer.yaml: Unified dynamic chunk causal conformer
 # 4. conf/train_unified_transformer.yaml: Unified dynamic chunk transformer
-train_config=conf/train_conformer.yaml
+train_config=conf/train_unified_transformer.yaml
+train_config=exp/20210203_unified_conformer_exp/train.yaml
 cmvn=true
-dir=exp/conformer
+dir=exp/20210327_unified_transformer_exp_server
+dir=exp/20210203_unified_conformer_exp
 checkpoint=
 
 # use average_checkpoint will get better result
@@ -207,6 +210,29 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
         --output_quant_file $dir/final_quant.zip
 fi
 
+
+if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
+    # 7.1 Prepare dict
+    unit_file=$dict
+    # mkdir -p data/local/dict
+    # cp $unit_file data/local/dict/units.txt
+    # tools/fst/prepare_dict.py $unit_file ${data}/resource_aishell/lexicon.txt \
+    #     data/local/dict/lexicon.txt
+    # 7.2 Train lm
+    lm=data/local/lm_kw
+    mkdir -p $lm
+    text=${lm}/text
+    # tools/filter_scp.pl  \
+    #      $data/data_aishell/transcript/aishell_transcript_v0.8.txt > $lm/text
+    local/aishell_train_lms_kw.sh
+    # 7.3 Build decoding TLG
+    
+    # tools/fst/compile_lexicon_token_fst.sh \
+    #     data/local/dict data/local/tmp data/local/lang
+    tools/fst/make_tlg.sh ${lm} data/local/lang data/lang_test_kw || exit 1;
+fi
+exit;
+
 # Optionally, you can add LM and test it with runtime.
 if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
     # 7.1 Prepare dict
@@ -222,18 +248,21 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
          $data/data_aishell/transcript/aishell_transcript_v0.8.txt > $lm/text
     local/aishell_train_lms.sh
     # 7.3 Build decoding TLG
+    
     tools/fst/compile_lexicon_token_fst.sh \
         data/local/dict data/local/tmp data/local/lang
     tools/fst/make_tlg.sh data/local/lm data/local/lang data/lang_test || exit 1;
     # 7.4 Decoding with runtime
-    ./tools/decode.sh --nj 16 \
+    ./tools/decode_2nd.sh --nj 16 \
         --beam 15.0 --lattice_beam 7.5 --max_active 7000 \
         --blank_skip_thresh 0.98 --ctc_weight 0.5 --rescoring_weight 1.0 \
         --fst_path data/lang_test/TLG.fst \
         data/test/wav.scp data/test/text $dir/final.zip \
-        data/lang_test/words.txt $dir/lm_with_runtime
+	data/lang_test/words.txt $dir/lm_with_runtime
+#        data/lang_test/words.txt $dir/lm_with_runtime
     # See $dir/lm_with_runtime for wer
 fi
+        #--fst_path data/lang_test/TLG.fst \
 
 if [ ${stage} -le 8 ] && [ ${stop_stage} -ge 8 ]; then
     # Test model, please specify the model you want to use by --checkpoint

@@ -26,6 +26,9 @@
 #include "decoder/lattice-faster-decoder.h"
 // #include "lat/lattice-functions.h"
 
+#define fst_num_states 1064833
+#define nbest_token 100
+
 namespace kaldi {
 
 // instantiate this class once for each thing you have to decode.
@@ -33,6 +36,17 @@ template <typename FST, typename Token>
 LatticeFasterDecoderTpl<FST, Token>::LatticeFasterDecoderTpl(
     const FST &fst, const LatticeFasterDecoderConfig &config)
     : fst_(&fst), delete_fst_(false), config_(config), num_toks_(0) {
+  config.Check();
+  toks_.SetSize(
+      1000);  // just so on the first frame we do something reasonable.
+}
+
+
+// instantiate this class once for each thing you have to decode.
+template <typename FST, typename Token>
+LatticeFasterDecoderTpl<FST, Token>::LatticeFasterDecoderTpl(
+    const FST &fst, const FST &fst_kw, const std::vector<int> &keywords_ids, const LatticeFasterDecoderConfig &config)
+    : fst_(&fst), fst_kw_(&fst_kw), keywords_ids_(keywords_ids), delete_fst_(false), config_(config), num_toks_(0) {
   config.Check();
   toks_.SetSize(
       1000);  // just so on the first frame we do something reasonable.
@@ -51,7 +65,10 @@ template <typename FST, typename Token>
 LatticeFasterDecoderTpl<FST, Token>::~LatticeFasterDecoderTpl() {
   DeleteElems(toks_.Clear());
   ClearActiveTokens();
-  if (delete_fst_) delete fst_;
+  if (delete_fst_) {
+    delete fst_;
+    delete fst_kw_;
+  }
 }
 
 template <typename FST, typename Token>
@@ -554,7 +571,11 @@ void LatticeFasterDecoderTpl<FST, Token>::ComputeFinalCosts(
     StateId state = final_toks->key;
     Token *tok = final_toks->val;
     const Elem *next = final_toks->tail;
-    BaseFloat final_cost = fst_->Final(state).Value();
+    BaseFloat final_cost = 0.0;
+    if(state < fst_num_states)
+      final_cost = fst_->Final(state).Value();
+    else
+      final_cost = fst_kw_->Final(state - fst_num_states).Value();
     BaseFloat cost = tok->tot_cost, cost_with_final = cost + final_cost;
     best_cost = std::min(cost, best_cost);
     best_cost_with_final = std::min(cost_with_final, best_cost_with_final);
@@ -620,8 +641,8 @@ void LatticeFasterDecoderTpl<FST, Token>::AdvanceDecoding(
     if (NumFramesDecoded() % config_.prune_interval == 0) {
       PruneActiveTokens(config_.lattice_beam * config_.prune_scale);
     }
-    BaseFloat cost_cutoff = ProcessEmitting(decodable);
-    ProcessNonemitting(cost_cutoff);
+    BaseFloat cost_cutoff = ProcessEmittingWithKW(decodable);
+    ProcessNonemittingKW(cost_cutoff);
   }
 }
 
@@ -816,17 +837,6 @@ BaseFloat LatticeFasterDecoderTpl<FST, Token>::ProcessEmitting(
   return next_cutoff;
 }
 
-// static inline
-template <typename FST, typename Token>
-void LatticeFasterDecoderTpl<FST, Token>::DeleteForwardLinks(Token *tok) {
-  ForwardLinkT *l = tok->links, *m;
-  while (l != NULL) {
-    m = l->next;
-    delete l;
-    l = m;
-  }
-  tok->links = NULL;
-}
 
 template <typename FST, typename Token>
 void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cutoff) {
@@ -896,6 +906,492 @@ void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cutoff) {
     }  // for all arcs
   }    // while queue not empty
 }
+
+
+template <typename FST, typename Token>
+BaseFloat LatticeFasterDecoderTpl<FST, Token>::ProcessEmittingWithKW(DecodableInterface *decodable) { 
+  KALDI_ASSERT(active_toks_.size() > 0);
+  int32 frame =
+      active_toks_.size() - 1;  // frame is the frame-index
+                                // (zero-based) used to get likelihoods
+                                // from the decodable object.
+  LOG(INFO) << "frame: "<<frame;
+  active_toks_.resize(active_toks_.size() + 1);
+
+  Elem *final_toks =
+      toks_.Clear();  // analogous to swapping prev_toks_ / cur_toks_
+                      // in simple-decoder.h.   Removes the Elems from
+                      // being indexed in the hash in toks_.
+  Elem *best_elem = NULL;
+  BaseFloat adaptive_beam;
+  size_t tok_cnt;
+  BaseFloat cur_cutoff =
+      GetCutoff(final_toks, &tok_cnt, &adaptive_beam, &best_elem);
+  KALDI_VLOG(6) << "Adaptive beam on frame " << NumFramesDecoded() << " is "
+                << adaptive_beam;
+
+  PossiblyResizeHash(
+      tok_cnt);  // This makes sure the hash is always big enough.
+
+  BaseFloat next_cutoff = std::numeric_limits<BaseFloat>::infinity();
+  // pruning "online" before having seen all tokens
+
+  BaseFloat cost_offset = 0.0;  // Used to keep probabilities in a good
+                                // dynamic range.
+
+  // First process the best token to get a hopefully
+  // reasonably tight bound on the next cutoff.  The only
+  // products of the next block are "next_cutoff" and "cost_offset".
+  if (best_elem) {
+    StateId state = best_elem->key;
+    Token *tok = best_elem->val;
+    cost_offset = -tok->tot_cost;
+    if(state < fst_num_states){
+      for (fst::ArcIterator<FST> aiter(*fst_, state); !aiter.Done();
+          aiter.Next()) {
+        const Arc &arc = aiter.Value();
+        if (arc.ilabel != 0) {  // propagate..
+          BaseFloat new_weight = arc.weight.Value() + cost_offset -
+                                decodable->LogLikelihood(frame, arc.ilabel) +
+                                tok->tot_cost;
+          if (new_weight + adaptive_beam < next_cutoff)
+            next_cutoff = new_weight + adaptive_beam;
+        }
+      }
+    }
+  }
+  // Store the offset on the acoustic likelihoods that we're applying.
+  // Could just do cost_offsets_.push_back(cost_offset), but we
+  // do it this way as it's more robust to future code changes.
+  cost_offsets_.resize(frame + 1, 0.0);
+  cost_offsets_[frame] = cost_offset;
+
+  // the tokens are now owned here, in final_toks, and the hash is empty.
+  // 'owned' is a complex thing here; the point is we need to call DeleteElem
+  // on each elem 'e' to let toks_ know we're done with them.
+  for (Elem *e = final_toks, *e_tail; e != NULL; e = e_tail) {
+    // loop this way because we delete "e" as we go.
+    StateId state = e->key;
+    Token *tok = e->val;
+    if(state > fst_num_states)
+      LOG(INFO) << state  << " " << state -  fst_num_states << " " << tok->tot_cost <<" "<<cur_cutoff<< std::endl;
+    if(tok->tot_cost <= cur_cutoff || state >= fst_num_states) {
+      if(state < fst_num_states){
+        for (fst::ArcIterator<FST> aiter(*fst_, state); !aiter.Done();
+            aiter.Next()) {
+          const Arc &arc = aiter.Value();
+          // LOG(INFO) << state << " " <<  arc.ilabel << " " << arc.olabel <<  " " <<  arc.nextstate << std::endl;
+          BaseFloat graph_cost_forward = 0.0;
+          if (arc.ilabel != 0) {  // propagate..
+            BaseFloat ac_cost = cost_offset -
+                                decodable->LogLikelihood(frame, arc.ilabel),
+                      graph_cost = arc.weight.Value(), cur_cost = tok->tot_cost,
+                      graph_cost_forward = graph_cost,
+                      tot_cost = cur_cost + ac_cost + graph_cost;
+            if (tot_cost >= next_cutoff)
+              continue;
+            else if (tot_cost + adaptive_beam < next_cutoff)
+              next_cutoff =
+                  tot_cost + adaptive_beam;  // prune by best current token
+            // Note: the frame indexes into active_toks_ are one-based,
+            // hence the + 1.
+            Elem *e_next =
+                FindOrAddToken(arc.nextstate, frame + 1, tot_cost, tok, NULL);
+            // NULL: no change indicator needed
+
+            // Add ForwardLink from tok to next_tok (put on head of list
+            // tok->links)
+            // KALDI_VLOG(6) << arc.ilabel << " " << arc.olabel << " " << graph_cost << " " << ac_cost;
+            
+            tok->links = new ForwardLinkT(e_next->val, arc.ilabel, arc.olabel,
+                                          graph_cost, ac_cost, tok->links);
+          }
+          
+          for(auto& shu_token_id:keywords_ids_){
+          {
+            // LOG(INFO) << frame<<" " << shu_token_id<<" "<<decodable->GetNumber(frame, shu_token_id);
+            // if(arc.ilabel == shu_token_id && decodable->GetNumber(frame, shu_token_id) < nbest_token){
+            if(arc.ilabel == shu_token_id){  
+              for (fst::ArcIterator<FST> aiter(*fst_kw_, 1); !aiter.Done();
+                  aiter.Next()) {
+                const Arc &arc_kw_fst = aiter.Value();
+
+                LOG(INFO) << state << " " <<  arc.ilabel << " " << arc.olabel <<  " " <<  arc.nextstate << std::endl;
+                LOG(INFO) << state << " " <<  arc_kw_fst.ilabel << " " << arc_kw_fst.olabel <<  " " <<  arc_kw_fst.nextstate << std::endl;
+                
+
+                if (arc_kw_fst.ilabel != 0) {  // propagate..
+                  BaseFloat ac_cost = cost_offset -
+                                      decodable->LogLikelihood(frame, arc_kw_fst.ilabel);
+
+                  BaseFloat graph_cost = arc_kw_fst.weight.Value() / 10.0;
+                  if(arc_kw_fst.ilabel == shu_token_id){
+                    graph_cost = 0.0;
+                    // graph_cost -= 10.0;
+                    // ac_cost /= 2.0;
+                  }
+                  BaseFloat cur_cost = tok->tot_cost,
+                            tot_cost = cur_cost + ac_cost + graph_cost ;
+                  LOG(INFO) << " " << next_cutoff << " "<< ac_cost << " " << graph_cost << " " << cur_cost << " " << tot_cost;
+                  if (tot_cost >= next_cutoff)
+                    continue; 
+                  else if (tot_cost + adaptive_beam < next_cutoff)
+                    next_cutoff =
+                        tot_cost + adaptive_beam;  // prune by best current token
+                  // Note: the frame indexes into active_toks_ are one-based,
+                  // hence the + 1.
+                  Elem *e_next =
+                      FindOrAddToken(arc_kw_fst.nextstate + fst_num_states, frame + 1, tot_cost, tok, NULL);
+                  LOG(INFO) <<" "<< e_next->key;
+                  
+                  // NULL: no change indicator needed
+                  // Add ForwardLink from tok to next_tok (put on head of list
+                  // tok->links)
+                  // KALDI_VLOG(6) << arc.ilabel << " " << arc.olabel << " " << graph_cost << " " << ac_cost;
+                  LOG(INFO) << arc_kw_fst.ilabel << " " << arc_kw_fst.olabel << " " << graph_cost << " " << ac_cost  <<" "<<tot_cost;
+                  tok->links = new ForwardLinkT(e_next->val, arc_kw_fst.ilabel, arc_kw_fst.olabel,
+                                                graph_cost, ac_cost, tok->links);
+                }//if
+              }//for
+            }//if
+          } //for(auto& shu_token_id:keywords_ids_)
+          }
+        }//for (fst::ArcIterator<FST> aiter(*fst_, state); !aiter.Done()
+      }
+      // 
+      if(state >= fst_num_states){
+        for (fst::ArcIterator<FST> aiter(*fst_kw_, state - fst_num_states); !aiter.Done();
+            aiter.Next()) {
+          const Arc &arc = aiter.Value();
+          LOG(INFO) << state << " " <<  arc.ilabel << " " << arc.olabel <<  " " <<  arc.nextstate << std::endl;
+          if (arc.ilabel != 0) {  // propagate..
+            BaseFloat ac_cost = cost_offset -
+                                decodable->LogLikelihood(frame, arc.ilabel);
+  
+            BaseFloat graph_cost = 0.0; //arc.weight.Value()
+            if(ac_cost > 10.0){
+              graph_cost -= ac_cost/2.0;
+            }
+            BaseFloat cur_cost = tok->tot_cost,
+                      tot_cost = cur_cost + ac_cost + graph_cost;
+            
+            LOG(INFO)  << frame<<"  "<< arc.ilabel<<" "<< ac_cost<<" "<< cur_cost << " "<< graph_cost <<" "<< tot_cost << " " << next_cutoff;
+            if (tot_cost >= next_cutoff )
+              continue;
+            else if (tot_cost + adaptive_beam < next_cutoff)
+              next_cutoff =
+                  tot_cost + adaptive_beam;  // prune by best current token
+            // Note: the frame indexes into active_toks_ are one-based,
+            // hence the + 1.
+            Elem *e_next =
+                FindOrAddToken(arc.nextstate +  fst_num_states, frame + 1, tot_cost, tok, NULL);
+            // NULL: no change indicator needed
+
+            // Add ForwardLink from tok to next_tok (put on head of list
+            // tok->links)
+            // KALDI_VLOG(6) << arc.ilabel << " " << arc.olabel << " " << graph_cost << " " << ac_cost;
+            LOG(INFO) << arc.ilabel << " " << arc.olabel << " " << graph_cost << " " << ac_cost <<" " <<tot_cost;
+            tok->links = new ForwardLinkT(e_next->val, arc.ilabel, arc.olabel,
+                                        graph_cost, ac_cost, tok->links);
+          }
+        }
+      }
+    }  // for all arcs
+    
+    e_tail = e->tail;
+    toks_.Delete(e);  // delete Elem
+  }
+  LOG(INFO) << "ProcessemittingKW once sueecess!!!";
+  return next_cutoff;
+}
+
+// static inline
+template <typename FST, typename Token>
+void LatticeFasterDecoderTpl<FST, Token>::DeleteForwardLinks(Token *tok) {
+  ForwardLinkT *l = tok->links, *m;
+  while (l != NULL) {
+    m = l->next;
+    delete l;
+    l = m;
+  }
+  tok->links = NULL;
+}
+
+template <typename FST, typename Token>
+void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemittingKW(BaseFloat cutoff) {
+  KALDI_ASSERT(!active_toks_.empty());
+  int32 frame = static_cast<int32>(active_toks_.size()) - 2;
+  KALDI_ASSERT(queue_.empty());
+
+  if (toks_.GetList() == NULL) {
+    if (!warned_) {
+      KALDI_WARN << "Error, no surviving tokens: frame is " << frame;
+      warned_ = true;
+    }
+  }
+
+  for (const Elem *e = toks_.GetList(); e != NULL; e = e->tail) {
+    StateId state = e->key;
+    if(state < fst_num_states){
+      if (fst_->NumInputEpsilons(state) != 0)
+        queue_.push_back(e);
+    }
+    else{ //else state >= fst_num_states
+        if (fst_kw_->NumInputEpsilons(state - fst_num_states) != 0) 
+        LOG(INFO) << state << " " <<fst_num_states;
+        queue_kw_.push_back(e);
+    }
+  }
+
+
+  while (!queue_kw_.empty()) {
+    const Elem *e = queue_kw_.back();
+    queue_kw_.pop_back();
+
+    StateId state = e->key;
+    Token *tok =
+        e->val;  // would segfault if e is a NULL pointer but this can't happen.
+    BaseFloat cur_cost = tok->tot_cost;
+    // if (cur_cost >= cutoff)  // Don't bother processing successors.
+    //   continue;
+    // If "tok" has any existing forward links, delete them,
+    // because we're about to regenerate them.  This is a kind
+    // of non-optimality (remember, this is the simple decoder),
+    // but since most states are emitting it's not a huge issue.
+    DeleteForwardLinks(tok);  // necessary when re-visiting
+    tok->links = NULL;
+    LOG(INFO) << state << " " <<fst_num_states;
+    for (fst::ArcIterator<FST> aiter(*fst_kw_, state - fst_num_states); !aiter.Done();
+        aiter.Next()) {
+      const Arc &arc = aiter.Value();
+      if (arc.ilabel == 0) {  // propagate nonemitting only...
+        BaseFloat graph_cost = arc.weight.Value(),
+                  tot_cost = cur_cost + graph_cost;
+        { //if1
+          bool changed;
+          Elem *e_new =
+              FindOrAddToken(arc.nextstate + fst_num_states, frame + 1, tot_cost, tok, &changed);
+          tok->links = new ForwardLinkT(e_new->val, 0, arc.olabel, graph_cost,
+                                        0, tok->links);
+          // "changed" tells us whether the new token has a different
+          // cost from before, or is new [if so, add into queue].
+          if (changed && fst_kw_->NumInputEpsilons(arc.nextstate) != 0){
+            queue_kw_.push_back(e_new);
+          }
+
+          {
+            //if(arc.nextstate == small_fst_num_states - 1){
+            if(arc.olabel == 0){
+              // bool changed;
+              Elem *e_new =
+                  FindOrAddToken(0, frame + 1, tot_cost, tok, &changed);
+              tok->links = new ForwardLinkT(e_new->val, 0, 0, 0,
+                                            0, tok->links);
+              if (changed){
+                queue_.push_back(e_new);
+                LOG(INFO) << e_new->key << " " << arc.nextstate;
+              }
+            }
+          }
+        }//if1
+      }//if (arc.ilabel == 0)
+    }  // for all arcs
+  }    // while queue not empty
+
+
+  while(!queue_.empty()) {
+    const Elem *e = queue_.back();
+    queue_.pop_back();
+
+    StateId state = e->key;
+    Token *tok =
+        e->val;  // would segfault if e is a NULL pointer but this can't happen.
+    BaseFloat cur_cost = tok->tot_cost;
+    if (cur_cost >= cutoff)  // Don't bother processing successors.
+      continue;
+    // If "tok" has any existing forward links, delete them,
+    // because we're about to regenerate them.  This is a kind
+    // of non-optimality (remember, this is the simple decoder),
+    // but since most states are emitting it's not a huge issue.
+    DeleteForwardLinks(tok);  // necessary when re-visiting
+    tok->links = NULL;
+    // LOG(INFO) << state << " " <<fst_num_states;
+    for (fst::ArcIterator<FST> aiter(*fst_, state); !aiter.Done();
+        aiter.Next()) {
+      const Arc &arc = aiter.Value();
+      if (arc.ilabel == 0) {  // propagate nonemitting only...
+        BaseFloat graph_cost = arc.weight.Value(),
+                  tot_cost = cur_cost + graph_cost;
+        if (tot_cost < cutoff) {
+          bool changed;
+
+          Elem *e_new =
+              FindOrAddToken(arc.nextstate, frame + 1, tot_cost, tok, &changed);
+
+          tok->links = new ForwardLinkT(e_new->val, 0, arc.olabel, graph_cost,
+                                        0, tok->links);
+
+          // "changed" tells us whether the new token has a different
+          // cost from before, or is new [if so, add into queue].
+          if (changed && fst_->NumInputEpsilons(arc.nextstate) != 0)
+            queue_.push_back(e_new);
+        }
+      }//if (arc.ilabel == 0) 
+    }  // for all arcs
+  }    // while queue not empty
+
+
+}
+
+// template <typename FST, typename Token>
+// void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemittingKW(BaseFloat cutoff) {
+//   KALDI_ASSERT(!active_toks_.empty());
+//   int32 frame = static_cast<int32>(active_toks_.size()) - 2;
+//   // Note: "frame" is the time-index we just processed, or -1 if
+//   // we are processing the nonemitting transitions before the
+//   // first frame (called from InitDecoding()).
+
+//   // Processes nonemitting arcs for one frame.  Propagates within toks_.
+//   // Note-- this queue structure is not very optimal as
+//   // it may cause us to process states unnecessarily (e.g. more than once),
+//   // but in the baseline code, turning this vector into a set to fix this
+//   // problem did not improve overall speed.
+
+//   KALDI_ASSERT(queue_.empty());
+
+//   if (toks_.GetList() == NULL) {
+//     if (!warned_) {
+//       KALDI_WARN << "Error, no surviving tokens: frame is " << frame;
+//       warned_ = true;
+//     }
+//   }
+
+//   for (const Elem *e = toks_.GetList(); e != NULL; e = e->tail) {
+//     StateId state = e->key;
+//     if (state < fst_num_states && fst_->NumInputEpsilons(state) != 0) queue_.push_back(e);
+//     if (state >= fst_num_states && fst_kw_->NumInputEpsilons(state - fst_num_states) != 0) queue_kw_.push_back(e);
+//   }
+
+//   while (!queue_.empty()) {
+//     const Elem *e = queue_.back();
+//     queue_.pop_back();
+
+//     StateId state = e->key;
+//     Token *tok =
+//         e->val;  // would segfault if e is a NULL pointer but this can't happen.
+//     BaseFloat cur_cost = tok->tot_cost;
+
+//     // LOG(INFO) << state <<" " <<cur_cost<<" "<<cutoff;
+//     if (cur_cost >= cutoff)  // Don't bother processing successors.
+//       continue;
+//     // If "tok" has any existing forward links, delete them,
+//     // because we're about to regenerate them.  This is a kind
+//     // of non-optimality (remember, this is the simple decoder),
+//     // but since most states are emitting it's not a huge issue.
+//     DeleteForwardLinks(tok);  // necessary when re-visiting
+//     tok->links = NULL;
+//     if(state < fst_num_states){
+//       for (fst::ArcIterator<FST> aiter(*fst_, state); !aiter.Done();
+//           aiter.Next()) {
+//         const Arc &arc = aiter.Value();
+//         if (state < fst_num_states && arc.ilabel == 0) {  // propagate nonemitting only...
+//           BaseFloat graph_cost = arc.weight.Value(),
+//                     tot_cost = cur_cost + graph_cost;
+//           if (tot_cost < cutoff) {
+//             bool changed;
+
+//             Elem *e_new =
+//                 FindOrAddToken(arc.nextstate, frame + 1, tot_cost, tok, &changed);
+//             //  LOG(INFO) << state << " " << arc.ilabel << " " 
+//             //   << arc.olabel << " " << arc.nextstate <<" "<< graph_cost<<" "<<cur_cost
+//             //   <<" "<<tot_cost<<" "<<cutoff<<" "<<std::endl;
+            
+//             tok->links = new ForwardLinkT(e_new->val, 0, arc.olabel, graph_cost,
+//                                           0, tok->links);
+
+//             // "changed" tells us whether the new token has a different
+//             // cost from before, or is new [if so, add into queue].
+//             if (changed && fst_->NumInputEpsilons(arc.nextstate) != 0)
+//               queue_.push_back(e_new);
+//           }
+//         }//
+//         if (arc.ilabel == shu_token_id) {  // propagate nonemitting only...
+//           LOG(INFO) << state << " " << arc.ilabel << " " << arc.olabel << " " << arc.nextstate << std::endl;
+//           for (fst::ArcIterator<FST> aiter(*fst_kw_, 0); !aiter.Done();
+//               aiter.Next()) {
+//             const Arc &arc_kw_fst = aiter.Value();
+//             if (arc_kw_fst.ilabel == 0) {  // propagate nonemitting only...
+//               BaseFloat graph_cost = 0.0,
+//                         tot_cost = cur_cost + graph_cost;
+//               tot_cost = 20.0;
+//               if (tot_cost < cutoff) {
+//                 bool changed;
+                
+//                 LOG(INFO) << state << " " <<  arc_kw_fst.ilabel << " " << arc_kw_fst.olabel <<  " " <<  arc_kw_fst.nextstate << 
+//                   " " << fst_kw_->NumInputEpsilons(arc_kw_fst.nextstate) << " " << tot_cost << std::endl;
+//                 Elem *e_new =
+//                     FindOrAddToken(arc_kw_fst.nextstate + fst_num_states, frame + 1, tot_cost, tok, &changed);
+
+//                 tok->links = new ForwardLinkT(e_new->val, 0, arc_kw_fst.olabel, graph_cost,
+//                                               0, tok->links);
+
+//                 // "changed" tells us whether the new token has a different
+//                 // cost from before, or is new [if so, add into queue].
+//                 if(changed && fst_kw_->NumInputEpsilons(arc_kw_fst.nextstate) != 0)
+//                   queue_kw_.push_back(e_new);
+//               }
+//             }
+//           }
+//         }
+//       }  // for all arcs
+//     } //if(state < fst_num_states)
+//     // LOG(INFO) << "ProcessNonemittingKW once sueecess!!!";
+//   }    // while queue not empty
+
+//   //
+//   while (!queue_kw_.empty()) {
+//     const Elem *e = queue_kw_.back();
+//     queue_kw_.pop_back();
+
+//     StateId state = e->key;
+//     Token *tok =
+//         e->val;  // would segfault if e is a NULL pointer but this can't happen.
+//     BaseFloat cur_cost = tok->tot_cost;
+//     if (cur_cost >= cutoff)  // Don't bother processing successors.
+//       continue;
+//     // If "tok" has any existing forward links, delete them,
+//     // because we're about to regenerate them.  This is a kind
+//     // of non-optimality (remember, this is the simple decoder),
+//     // but since most states are emitting it's not a huge issue.
+//     DeleteForwardLinks(tok);  // necessary when re-visiting
+//     tok->links = NULL;
+//     if(state > fst_num_states){
+//       for (fst::ArcIterator<FST> aiter(*fst_kw_, state - fst_num_states); !aiter.Done();
+//           aiter.Next()) {
+//         const Arc &arc = aiter.Value();
+//         LOG(INFO) << state << " " <<  arc.ilabel << " " << arc.olabel <<  " " <<  arc.nextstate << std::endl;
+//         if (arc.ilabel == 0) {  // propagate nonemitting only...
+//           BaseFloat graph_cost = arc.weight.Value(),
+//                     tot_cost = cur_cost + graph_cost;
+//           if (tot_cost < cutoff) {
+//             bool changed;
+
+//             Elem *e_new =
+//                 FindOrAddToken(arc.nextstate + fst_num_states, frame + 1, tot_cost, tok, &changed);
+
+//             tok->links = new ForwardLinkT(e_new->val, 0, arc.olabel, graph_cost,
+//                                           0, tok->links);
+
+//             // "changed" tells us whether the new token has a different
+//             // cost from before, or is new [if so, add into queue].
+//             if (changed && fst_->NumInputEpsilons(arc.nextstate) != 0)
+//               queue_kw_.push_back(e_new);
+//           }
+//         }//
+//       }//for
+//     }//if
+//   }//while
+// }
 
 template <typename FST, typename Token>
 void LatticeFasterDecoderTpl<FST, Token>::DeleteElems(Elem *list) {

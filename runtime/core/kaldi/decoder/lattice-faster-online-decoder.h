@@ -58,6 +58,12 @@ class LatticeFasterOnlineDecoderTpl
                                 const LatticeFasterDecoderConfig &config)
       : LatticeFasterDecoderTpl<FST, Token>(fst, config) {}
 
+  LatticeFasterOnlineDecoderTpl(const FST &fst,
+                                const FST &fst_kw,
+                                const std::vector<int> &keywords_ids,
+                                const LatticeFasterDecoderConfig &config)
+      : LatticeFasterDecoderTpl<FST, Token>(fst, fst_kw, keywords_ids, config) {}
+
   // This version of the initializer takes ownership of 'fst', and will delete
   // it when this object is destroyed.
   LatticeFasterOnlineDecoderTpl(const LatticeFasterDecoderConfig &config,

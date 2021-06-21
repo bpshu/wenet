@@ -20,13 +20,16 @@ DEFINE_string(result, "", "result output file");
 
 int main(int argc, char *argv[]) {
   google::ParseCommandLineFlags(&argc, &argv, false);
-  google::InitGoogleLogging(argv[0]);
+  //google::InitGoogleLogging(argv[0]);
 
   auto model = wenet::InitTorchAsrModelFromFlags();
   auto symbol_table = wenet::InitSymbolTableFromFlags();
+  auto token_symbol_table = wenet::InitTokenSymbolTableFromFlags();
+  auto keywords_ids = wenet::InitFirstKeywordFromFlags(token_symbol_table);
   auto decode_config = wenet::InitDecodeOptionsFromFlags();
   auto feature_config = wenet::InitFeaturePipelineConfigFromFlags();
   auto fst = wenet::InitFstFromFlags();
+  auto fst_kw = wenet::InitFstKwFromFlags();
   auto feature_pipeline =
       std::make_shared<wenet::FeaturePipeline>(*feature_config);
 
@@ -65,8 +68,11 @@ int main(int argc, char *argv[]) {
     feature_pipeline->set_input_finished();
     LOG(INFO) << "num frames " << feature_pipeline->num_frames();
 
-    wenet::TorchAsrDecoder decoder(feature_pipeline, model, symbol_table,
-                                   *decode_config, fst);
+    // wenet::TorchAsrDecoder decoder(feature_pipeline, model, symbol_table,
+    //                                *decode_config, fst);
+
+    wenet::TorchAsrDecoder decoder(feature_pipeline, model, symbol_table, token_symbol_table, keywords_ids,
+                                   *decode_config, fst, fst_kw);
 
     int wave_dur = static_cast<int>(static_cast<float>(
                 wav_reader.num_sample()) / wav_reader.sample_rate() * 1000);

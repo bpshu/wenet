@@ -30,13 +30,22 @@ class DecodableTensorScaled : public kaldi::DecodableInterface {
   int32 NumIndices() const override;
   void AcceptLoglikes(const torch::Tensor& logp);
   void SetFinish() { done_ = true; }
+  //
+  bool LogLikelihoodSorted();
+  int GetNumber(int32 frame, int32 index) const {
+    return token_ids_[frame][index];
+  }
+    
+ 
 
  private:
+  std::vector<std::vector<int> > token_ids_;
   int num_frames_ready_ = 0;
   float scale_ = 1.0;
   bool done_ = false;
   torch::Tensor logp_;
   std::unique_ptr<torch::TensorAccessor<float, 1>> accessor_;
+  
 };
 
 // LatticeFasterDecoderConfig has the following key members
@@ -54,6 +63,10 @@ struct CtcWfstBeamSearchOptions : public kaldi::LatticeFasterDecoderConfig {
 class CtcWfstBeamSearch : public SearchInterface {
  public:
   explicit CtcWfstBeamSearch(const fst::Fst<fst::StdArc>& fst,
+                             const CtcWfstBeamSearchOptions& opts);
+  explicit CtcWfstBeamSearch(const fst::Fst<fst::StdArc>& fst,
+                             const fst::Fst<fst::StdArc>& fst_kw,
+                             const std::vector<int>& keywords_ids,
                              const CtcWfstBeamSearchOptions& opts);
   void Search(const torch::Tensor& logp) override;
   void Reset() override;

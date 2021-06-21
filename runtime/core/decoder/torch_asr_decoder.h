@@ -75,6 +75,15 @@ class TorchAsrDecoder {
                   const DecodeOptions& opts,
                   std::shared_ptr<fst::StdVectorFst> fst = nullptr);
 
+  TorchAsrDecoder(std::shared_ptr<FeaturePipeline> feature_pipeline,
+                  std::shared_ptr<TorchAsrModel> model,
+                  std::shared_ptr<fst::SymbolTable> symbol_table,
+                  std::shared_ptr<fst::SymbolTable> token_symbol_table,
+                  std::vector<int> keywords_ids, 
+                  const DecodeOptions& opts,
+                  std::shared_ptr<fst::StdVectorFst> fst = nullptr,
+                  std::shared_ptr<fst::StdVectorFst> fst_kw = nullptr);
+
   DecodeState Decode();
   void Rescoring();
   void Reset();
@@ -105,6 +114,8 @@ class TorchAsrDecoder {
   std::shared_ptr<FeaturePipeline> feature_pipeline_;
   std::shared_ptr<TorchAsrModel> model_;
   std::shared_ptr<fst::SymbolTable> symbol_table_;
+  std::shared_ptr<fst::SymbolTable> token_symbol_table_;
+  std::vector<int> keywords_ids_;
   const DecodeOptions& opts_;
   // cache feature
   std::vector<std::vector<float>> cached_feature_;

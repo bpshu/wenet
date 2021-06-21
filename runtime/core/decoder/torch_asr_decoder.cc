@@ -32,6 +32,37 @@ TorchAsrDecoder::TorchAsrDecoder(
   ctc_endpointer_->frame_shift_in_ms(frame_shift_in_ms());
 }
 
+TorchAsrDecoder::TorchAsrDecoder(
+    std::shared_ptr<FeaturePipeline> feature_pipeline,
+    std::shared_ptr<TorchAsrModel> model,
+    std::shared_ptr<fst::SymbolTable> symbol_table,
+    std::shared_ptr<fst::SymbolTable> token_symbol_table,
+    std::vector<int> keywords_ids,
+    const DecodeOptions& opts,
+    std::shared_ptr<fst::StdVectorFst> fst,
+    std::shared_ptr<fst::StdVectorFst> fst_kw)
+    : feature_pipeline_(std::move(feature_pipeline)),
+      model_(std::move(model)),
+      symbol_table_(symbol_table),
+      token_symbol_table_(token_symbol_table),
+      keywords_ids_(keywords_ids),
+      opts_(opts),
+      ctc_endpointer_(new CtcEndpoint(opts.ctc_endpoint_config)) {
+
+        // LOG(INFO) << fst->NumStates();
+        // LOG(INFO) << fst_kw->NumStates();
+      
+  if (nullptr == fst) {
+    searcher_.reset(new CtcPrefixBeamSearch(opts.ctc_prefix_search_opts));
+  } else {
+    if(fst_kw == nullptr)
+      searcher_.reset(new CtcWfstBeamSearch(*fst, opts.ctc_wfst_search_opts));
+    else
+      searcher_.reset(new CtcWfstBeamSearch(*fst, *fst_kw, keywords_ids, opts.ctc_wfst_search_opts));
+  }
+  ctc_endpointer_->frame_shift_in_ms(frame_shift_in_ms());
+}
+
 void TorchAsrDecoder::Reset() {
   start_ = false;
   result_.clear();
@@ -103,6 +134,7 @@ DecodeState TorchAsrDecoder::AdvanceDecoding() {
             << chunk_feats.size();
   int num_frames = cached_feature_.size() + chunk_feats.size();
   // The total frames should be big enough to get just one output
+   LOG(INFO) << "num_frames " << num_frames << " right_context " <<right_context;
   if (num_frames >= right_context + 1) {
     // 1. Prepare libtorch requried data, splice cached_feature_ and chunk_feats
     torch::Tensor feats =
@@ -142,9 +174,11 @@ DecodeState TorchAsrDecoder::AdvanceDecoding() {
     offset_ += chunk_out.size(1);
     // The first dimension is a fake dimension, it's 1 for one utterance,
     // so just ignore it here.
+    // LOG(INFO) << chunk_out.sizes();
     torch::Tensor ctc_log_probs = model_->torch_model()
                                       ->run_method("ctc_activation", chunk_out)
                                       .toTensor()[0];
+    // LOG(INFO) << ctc_log_probs.sizes();
     encoder_outs_.push_back(std::move(chunk_out));
     int forward_time = timer.Elapsed();
     timer.Reset();

@@ -5,6 +5,7 @@
 #define DECODER_PARAMS_H_
 
 #include <memory>
+#include <iostream>
 
 #include "decoder/torch_asr_decoder.h"
 #include "decoder/torch_asr_model.h"
@@ -21,7 +22,7 @@ DEFINE_int32(sample_rate, 16000, "sample rate for audio");
 
 // TLG fst
 DEFINE_string(fst_path, "", "TLG fst path");
-
+DEFINE_string(fst_kw_path, "", "KW TLG fst path");
 // DecodeOptions flags
 DEFINE_int32(chunk_size, 16, "decoding chunk size");
 DEFINE_int32(num_left_chunks, -1, "left chunks in decoding");
@@ -38,6 +39,8 @@ DEFINE_double(blank_skip_thresh, 1.0,
 
 // SymbolTable flags
 DEFINE_string(dict_path, "", "dict path");
+DEFINE_string(token_path, "", "tokens path");
+DEFINE_string(keywords_path, "", "keywords path");
 
 namespace wenet {
 
@@ -61,6 +64,14 @@ std::shared_ptr<fst::StdVectorFst> InitFstFromFlags() {
   return fst;
 }
 
+std::shared_ptr<fst::StdVectorFst> InitFstKwFromFlags() {
+  std::shared_ptr<fst::StdVectorFst> fst = nullptr;
+  if (!FLAGS_fst_path.empty()) {
+    fst.reset(fst::StdVectorFst::Read(FLAGS_fst_kw_path));
+  }
+  return fst;
+}
+
 std::shared_ptr<DecodeOptions> InitDecodeOptionsFromFlags() {
   auto decode_config = std::make_shared<DecodeOptions>();
   decode_config->chunk_size = FLAGS_chunk_size;
@@ -80,6 +91,35 @@ std::shared_ptr<fst::SymbolTable> InitSymbolTableFromFlags() {
   auto symbol_table = std::shared_ptr<fst::SymbolTable>(
       fst::SymbolTable::ReadText(FLAGS_dict_path));
   return symbol_table;
+}
+
+std::shared_ptr<fst::SymbolTable> InitTokenSymbolTableFromFlags() {
+  auto symbol_table = std::shared_ptr<fst::SymbolTable>(
+      fst::SymbolTable::ReadText(FLAGS_token_path));
+  return symbol_table;
+}
+
+
+void split_line(const std::string& line, std::string& key, std::string& val){
+  if(line.empty()) return;
+  int i = 0;
+  while(i < line.size() && !isspace(line[i])) ++i;
+  // LOG(INFO) << i;
+  key = line.substr(0, i);
+  val = line.substr(i+1, 3);
+}
+
+std::vector<int> InitFirstKeywordFromFlags(std::shared_ptr<fst::SymbolTable> symbol_table){
+  std::ifstream myfile(FLAGS_keywords_path);
+  std::string temp, key, val;
+  std::vector<int> keywords_ids;
+  while(std::getline(myfile, temp)){
+    split_line(temp, key, val);
+    // LOG(INFO) <<temp<<" "<< key << " "<< val;
+    keywords_ids.push_back(symbol_table->Find(val));
+  }
+  myfile.close();
+  return keywords_ids;
 }
 
 }  // namespace wenet

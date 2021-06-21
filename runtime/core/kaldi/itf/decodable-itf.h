@@ -114,7 +114,8 @@ class DecodableInterface {
   /// this is for compatibility with OpenFst).
   virtual int32 NumIndices() const = 0;
 
-  virtual ~DecodableInterface() {}
+  virtual ~DecodableInterface() {};
+  virtual int GetNumber(int32 frame, int32 index) const = 0;
 };
 /// @}
 }  // namespace kaldi

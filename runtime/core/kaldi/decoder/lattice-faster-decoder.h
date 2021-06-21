@@ -257,6 +257,11 @@ class LatticeFasterDecoderTpl {
   LatticeFasterDecoderTpl(const FST &fst,
                           const LatticeFasterDecoderConfig &config);
 
+  LatticeFasterDecoderTpl(const FST &fst,
+                          const FST &fst_kw,
+                          const std::vector<int> &keywords_ids,
+                          const LatticeFasterDecoderConfig &config);
+
   // This version of the constructor takes ownership of the fst, and will delete
   // it when this object is destroyed.
   LatticeFasterDecoderTpl(const LatticeFasterDecoderConfig &config, FST *fst);
@@ -449,12 +454,13 @@ class LatticeFasterDecoderTpl {
   /// cur_toks_.  Returns the cost cutoff for subsequent ProcessNonemitting() to
   /// use.
   BaseFloat ProcessEmitting(DecodableInterface *decodable);
+  BaseFloat ProcessEmittingWithKW(DecodableInterface *decodable);
 
   /// Processes nonemitting (epsilon) arcs for one frame.  Called after
   /// ProcessEmitting() on each frame.  The cost cutoff is computed by the
   /// preceding ProcessEmitting().
   void ProcessNonemitting(BaseFloat cost_cutoff);
-
+  void ProcessNonemittingKW(BaseFloat cost_cutoff);
   // HashList defined in ../util/hash-list.h.  It actually allows us to maintain
   // more than one list (e.g. for current and previous frames), but only one of
   // them at a time can be indexed by StateId.  It is indexed by frame-index
@@ -469,10 +475,14 @@ class LatticeFasterDecoderTpl {
   // must_prune_tokens).
   std::vector<const Elem *>
       queue_;  // temp variable used in ProcessNonemitting,
+  std::vector<const Elem *>
+      queue_kw_;  // temp variable used in ProcessNonemitting,
   std::vector<BaseFloat> tmp_array_;  // used in GetCutoff.
 
   // fst_ is a pointer to the FST we are decoding from.
   const FST *fst_;
+  const FST *fst_kw_;
+  const std::vector<int> keywords_ids_;
   // delete_fst_ is true if the pointer fst_ needs to be deleted when this
   // object is destroyed.
   bool delete_fst_;
