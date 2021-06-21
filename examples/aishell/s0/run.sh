@@ -177,6 +177,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     # -1 for full chunk
     decoding_chunk_size=
     ctc_weight=0.5
+    reverse_weight=0.0
     for mode in ${decode_modes}; do
     {
         test_dir=$dir/test_${mode}
@@ -191,6 +192,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
             --penalty 0.0 \
             --dict $dict \
             --ctc_weight $ctc_weight \
+            --reverse_weight $reverse_weight \
             --result_file $test_dir/text \
             ${decoding_chunk_size:+--decoding_chunk_size $decoding_chunk_size}
          python tools/compute-wer.py --char=1 --v=1 \
@@ -253,9 +255,13 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
         data/local/dict data/local/tmp data/local/lang
     tools/fst/make_tlg.sh data/local/lm data/local/lang data/lang_test || exit 1;
     # 7.4 Decoding with runtime
-    ./tools/decode_2nd.sh --nj 16 \
+    # reverse_weight only works for u2++ model and only left to right decoder is used when it is set to 0.0.
+    reverse_weight=0.0
+    chunk_size=-1
+    ./tools/decode.sh --nj 16 \
         --beam 15.0 --lattice_beam 7.5 --max_active 7000 \
         --blank_skip_thresh 0.98 --ctc_weight 0.5 --rescoring_weight 1.0 \
+        --reverse_weight $reverse_weight --chunk_size $chunk_size \
         --fst_path data/lang_test/TLG.fst \
         data/test/wav.scp data/test/text $dir/final.zip \
 	data/lang_test/words.txt $dir/lm_with_runtime

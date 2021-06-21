@@ -861,12 +861,15 @@ void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cutoff) {
     }
   }
 
+  int before = 0, after = 0;
   for (const Elem *e = toks_.GetList(); e != NULL; e = e->tail) {
     StateId state = e->key;
     if (fst_->NumInputEpsilons(state) != 0) queue_.push_back(e);
+    ++before;
   }
 
   while (!queue_.empty()) {
+    ++after;
     const Elem *e = queue_.back();
     queue_.pop_back();
 
@@ -905,6 +908,7 @@ void LatticeFasterDecoderTpl<FST, Token>::ProcessNonemitting(BaseFloat cutoff) {
       }
     }  // for all arcs
   }    // while queue not empty
+  KALDI_VLOG(3) << "ProcessNonemitting " << before << " " << after;
 }
 
 
